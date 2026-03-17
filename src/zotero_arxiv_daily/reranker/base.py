@@ -29,22 +29,28 @@ class BaseReranker(ABC):
             return {'interested_papers': [], 'not_interested_papers': [], 'interest_keywords': []}
 
     def _calculate_tag_weight(self, tags: list[str]) -> float:
-        """Calculate weight based on Zotero tags (5-star rating system)"""
+        """Calculate weight based on Zotero tags (5-star rating system)
+
+        Philosophy: All starred papers represent your interests, just at different quality levels.
+        The weight differences are moderate to avoid over-fitting to only 5-star papers.
+        """
         tag_config = self.config.reranker.get('tag_weights', {})
 
-        # Default 5-star rating weights
+        # Moderate weight differences - all stars matter!
+        # 5-star and 4-star are similar (both are your core interests)
+        # 3-star still has strong influence (relevant topics, maybe just not as well-written)
         default_weights = {
-            '⭐⭐⭐⭐⭐': 5.0,  # 5 stars - extremely relevant
-            '⭐⭐⭐⭐': 4.0,    # 4 stars - very relevant
-            '⭐⭐⭐': 3.0,      # 3 stars - relevant
-            '⭐⭐': 2.0,        # 2 stars - somewhat relevant
-            '⭐': 1.5,          # 1 star - slightly relevant
+            '⭐⭐⭐⭐⭐': 2.5,  # 5 stars - excellent papers in your field
+            '⭐⭐⭐⭐': 2.3,    # 4 stars - very good papers (similar weight to 5-star)
+            '⭐⭐⭐': 2.0,      # 3 stars - good papers (still strong influence)
+            '⭐⭐': 1.5,        # 2 stars - relevant but less influential
+            '⭐': 1.2,          # 1 star - somewhat relevant
             # Alternative text tags
-            '5-star': 5.0,
-            '4-star': 4.0,
-            '3-star': 3.0,
-            '2-star': 2.0,
-            '1-star': 1.5,
+            '5-star': 2.5,
+            '4-star': 2.3,
+            '3-star': 2.0,
+            '2-star': 1.5,
+            '1-star': 1.2,
         }
 
         # Merge config with defaults
@@ -79,6 +85,10 @@ class BaseReranker(ABC):
         # Calculate final scores with combined weights
         scores = (sim * combined_weight).sum(axis=1) * 10 # [n_candidate]
 
+        # Add diversity bonus for "surprise" papers
+        diversity_bonus = self._calculate_diversity_bonus(candidates, scores, sim, combined_weight)
+        scores = scores + diversity_bonus
+
         for s,c in zip(scores,candidates):
             c.score = s
 
@@ -86,6 +96,32 @@ class BaseReranker(ABC):
 
         logger.info(f"Reranked {len(candidates)} papers with tag weights (avg weight: {tag_weights.mean():.2f})")
         return candidates
+
+    def _calculate_diversity_bonus(self, candidates: list[Paper], scores: np.ndarray,
+                                   sim: np.ndarray, weights: np.ndarray) -> np.ndarray:
+        """
+        Add small bonus to diverse/surprising papers to avoid echo chamber.
+        Papers that are moderately similar (not too high, not too low) get a small boost.
+        """
+        diversity_config = self.config.reranker.get('diversity', {})
+        if not diversity_config.get('enabled', True):
+            return np.zeros_like(scores)
+
+        bonus_strength = diversity_config.get('bonus_strength', 0.3)  # Max bonus as fraction of score
+
+        # Calculate average similarity for each candidate
+        avg_similarity = (sim * weights).sum(axis=1)
+
+        # Papers with moderate similarity (0.3-0.7) get bonus
+        # This helps surface interesting but not too similar papers
+        diversity_score = np.zeros_like(avg_similarity)
+        mask = (avg_similarity > 0.3) & (avg_similarity < 0.7)
+        diversity_score[mask] = 1.0 - np.abs(avg_similarity[mask] - 0.5) * 2  # Peak at 0.5
+
+        # Apply bonus (scaled by current score to maintain relative ordering)
+        bonus = diversity_score * scores * bonus_strength
+
+        return bonus
 
     @abstractmethod
     def get_similarity_score(self, s1:list[str], s2:list[str]) -> np.ndarray:

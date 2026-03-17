@@ -10,18 +10,18 @@ def test_tag_weight_calculation():
     """Test tag weight calculation logic"""
     print("Testing tag weight calculation...")
 
-    # Simulate the tag weight config (5-star system)
+    # Simulate the tag weight config (moderate differences)
     tag_weights = {
-        '⭐⭐⭐⭐⭐': 5.0,
-        '⭐⭐⭐⭐': 4.0,
-        '⭐⭐⭐': 3.0,
-        '⭐⭐': 2.0,
-        '⭐': 1.5,
-        '5-star': 5.0,
-        '4-star': 4.0,
-        '3-star': 3.0,
-        '2-star': 2.0,
-        '1-star': 1.5,
+        '⭐⭐⭐⭐⭐': 2.5,
+        '⭐⭐⭐⭐': 2.3,
+        '⭐⭐⭐': 2.0,
+        '⭐⭐': 1.5,
+        '⭐': 1.2,
+        '5-star': 2.5,
+        '4-star': 2.3,
+        '3-star': 2.0,
+        '2-star': 1.5,
+        '1-star': 1.2,
     }
 
     def calculate_tag_weight(tags):
@@ -33,14 +33,14 @@ def test_tag_weight_calculation():
 
     test_cases = [
         ([], 1.0, "No tags (default)"),
-        (['⭐'], 1.5, "1 star"),
-        (['⭐⭐'], 2.0, "2 stars"),
-        (['⭐⭐⭐'], 3.0, "3 stars"),
-        (['⭐⭐⭐⭐'], 4.0, "4 stars"),
-        (['⭐⭐⭐⭐⭐'], 5.0, "5 stars"),
-        (['5-star'], 5.0, "5-star text tag"),
-        (['3-star'], 3.0, "3-star text tag"),
-        (['⭐⭐⭐', '⭐⭐⭐⭐⭐'], 5.0, "Multiple tags (should use max)"),
+        (['⭐'], 1.2, "1 star"),
+        (['⭐⭐'], 1.5, "2 stars"),
+        (['⭐⭐⭐'], 2.0, "3 stars"),
+        (['⭐⭐⭐⭐'], 2.3, "4 stars"),
+        (['⭐⭐⭐⭐⭐'], 2.5, "5 stars"),
+        (['5-star'], 2.5, "5-star text tag"),
+        (['3-star'], 2.0, "3-star text tag"),
+        (['⭐⭐⭐', '⭐⭐⭐⭐⭐'], 2.5, "Multiple tags (should use max)"),
         (['random-tag'], 1.0, "Unknown tag"),
     ]
 
@@ -93,8 +93,8 @@ def test_weight_combination():
     time_decay = 1 / (1 + np.log10(np.arange(n_corpus) + 1))
     time_decay = time_decay / time_decay.sum()
 
-    # Tag weights for each paper (5-star system)
-    tag_weights = np.array([5.0, 4.0, 3.0, 2.0, 1.0])  # First paper has highest tag weight
+    # Tag weights for each paper (moderate differences)
+    tag_weights = np.array([2.5, 2.3, 2.0, 1.5, 1.0])  # 5-star, 4-star, 3-star, 2-star, untagged
 
     # Combined weights
     combined = time_decay * tag_weights
