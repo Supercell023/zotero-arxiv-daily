@@ -49,30 +49,64 @@ class Paper:
             messages=[
                 {
                     "role": "system",
-                    "content": f"""You are an expert research assistant. Create a concise summary in {lang}.
+                    "content": f"""You are an expert research assistant. Create a comprehensive yet concise summary in {lang}.
 
 Format (MUST follow exactly):
-**TLDR:** [2-3 sentences: What's the main contribution? Why does it matter? Any surprising results?]
-**Keywords:** [3-5 keywords: domain, method, application]
+**TLDR:** [3-4 sentences covering: 1) Main contribution/problem, 2) Key technical approach/method details, 3) Why it matters/results, 4) Any surprising findings]
+**Keywords:** [4-6 keywords: domain, method, technical details, application]
 
 Example:
-**TLDR:** This paper introduces a sparse attention mechanism that reduces memory usage by 60% in vision transformers while maintaining comparable accuracy to dense attention. The method is particularly effective for high-resolution images and can be easily integrated into existing architectures. Experiments show surprising improvements on small datasets.
-**Keywords:** Computer Vision, Sparse Attention, Vision Transformers, Efficient Deep Learning
+**TLDR:** This paper introduces a sparse attention mechanism that reduces memory usage by 60% in vision transformers while maintaining comparable accuracy to dense attention. The key innovation is a learnable token selection module that dynamically identifies and prunes less important tokens based on their attention scores, combined with a lightweight reconstruction loss to preserve semantic information. The method is particularly effective for high-resolution images and can be easily integrated into existing architectures with minimal code changes. Experiments show surprising improvements on small datasets, suggesting the approach also acts as an implicit regularizer.
+**Keywords:** Computer Vision, Sparse Attention, Vision Transformers, Token Pruning, Efficient Deep Learning, High-Resolution Images
 
-Keep it informative but concise. Focus on what makes this paper interesting.""",
+Be specific about the METHOD - mention the key technical components, architecture choices, or algorithmic innovations. Focus on what makes this paper technically interesting and practically useful.""",
                 },
                 {"role": "user", "content": prompt},
             ],
             **llm_params.get('generation_kwargs', {})
         )
-        tldr = response.choices[0].message.content
+        tldr_en = response.choices[0].message.content
 
         # Extract keywords if present
-        if "**Keywords:**" in tldr:
-            parts = tldr.split("**Keywords:**")
+        if "**Keywords:**" in tldr_en:
+            parts = tldr_en.split("**Keywords:**")
             if len(parts) == 2:
                 keywords_text = parts[1].strip()
                 self.keywords = [k.strip() for k in keywords_text.split(',')]
+
+        # Generate Chinese translation
+        try:
+            cn_response = openai_client.chat.completions.create(
+                messages=[
+                    {
+                        "role": "system",
+                        "content": """Role: You are a senior academic researcher specializing in Computer Science, Artificial Intelligence, and Robotics (specifically Embodied AI, Control Theory, and Computer Vision). You are an expert in the terminology and stylistic conventions of IEEE/RSJ publications.
+
+Task: Provide a proficient and precise translation from English to Chinese of the academic text.
+
+Core Instructions:
+
+Domain-Specific Accuracy: Utilize precise technical terminology. For instance, translate Policy as 策略, Action Chunking as 动作分块, Gating as 门控, End-to-end as 端到端, and Robustness as 鲁棒性.
+
+Intelligent Semantic Completion: Use your specialized knowledge in robotics and AI to ensure the translation is coherent and professionally sound.
+
+Tone and Style: Maintain a formal, rigorous academic tone consistent with top-tier conferences like CoRL, RSS, or ICRA.
+
+Output Format: Keep the same format with **TLDR:** and **Keywords:** markers in Chinese (使用 **摘要:** 和 **关键词:**).
+
+Output Constraints: Provide only the translated result without any additional explanation.""",
+                    },
+                    {"role": "user", "content": f"Translate this academic summary to Chinese:\n\n{tldr_en}"},
+                ],
+                **llm_params.get('generation_kwargs', {})
+            )
+            tldr_cn = cn_response.choices[0].message.content
+
+            # Combine English and Chinese
+            tldr = f"{tldr_en}\n\n{tldr_cn}"
+        except Exception as e:
+            logger.warning(f"Failed to generate Chinese translation: {e}")
+            tldr = tldr_en
 
         return tldr
     
