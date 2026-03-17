@@ -1,0 +1,47 @@
+zotero:
+  user_id: ${oc.env:ZOTERO_ID}
+  api_key: ${oc.env:ZOTERO_KEY}
+  include_path: null
+
+email:
+  sender: ${oc.env:SENDER}
+  receiver: ${oc.env:RECEIVER}
+  smtp_server: smtp.qq.com
+  smtp_port: 465
+  sender_password: ${oc.env:SENDER_PASSWORD}
+
+llm:
+  api:
+    key: ${oc.env:OPENAI_API_KEY}
+    base_url: ${oc.env:OPENAI_API_BASE}
+  generation_kwargs:
+    model: deepseek-chat
+    max_tokens: 1024  # 移到这里
+  language: English
+
+reranker:
+  llm:
+    max_corpus_samples: 20
+    batch_size: 5
+  tag_weights:
+    ⭐⭐⭐⭐⭐: 2.5
+    ⭐⭐⭐⭐: 2.3
+    ⭐⭐⭐: 2.0
+    ⭐⭐: 1.5
+    ⭐: 1.2
+  diversity:
+    enabled: true
+    bonus_strength: 0.3
+
+source:
+  arxiv:
+    category: ["cs.AI","cs.CV","cs.LG","cs.CL","cs.RO","cs.SY","cs.CE"]
+    include_cross_list: true
+
+executor:
+  send_empty: false
+  max_workers: 16
+  max_paper_num: 50
+  reranker: llm  # 使用 LLM reranker
+  debug: ${oc.env:DEBUG,null}
+  source: ['arxiv']

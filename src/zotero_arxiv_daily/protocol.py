@@ -76,6 +76,10 @@ Be specific about the METHOD - mention the key technical components, architectur
 
         # Generate Chinese translation
         try:
+            # Use a separate max_tokens for translation to ensure it completes
+            translation_kwargs = llm_params.get('generation_kwargs', {}).copy()
+            translation_kwargs['max_tokens'] = min(translation_kwargs.get('max_tokens', 1024), 1024)
+
             cn_response = openai_client.chat.completions.create(
                 messages=[
                     {
@@ -98,14 +102,15 @@ Output Constraints: Provide only the translated result without any additional ex
                     },
                     {"role": "user", "content": f"Translate this academic summary to Chinese:\n\n{tldr_en}"},
                 ],
-                **llm_params.get('generation_kwargs', {})
+                **translation_kwargs
             )
             tldr_cn = cn_response.choices[0].message.content
 
             # Combine English and Chinese
             tldr = f"{tldr_en}\n\n{tldr_cn}"
+            logger.info(f"Successfully generated bilingual TLDR for {self.url}")
         except Exception as e:
-            logger.warning(f"Failed to generate Chinese translation: {e}")
+            logger.warning(f"Failed to generate Chinese translation for {self.url}: {e}")
             tldr = tldr_en
 
         return tldr
