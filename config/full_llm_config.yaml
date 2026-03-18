@@ -1,0 +1,52 @@
+zotero:
+  user_id: ${oc.env:ZOTERO_ID}
+  api_key: ${oc.env:ZOTERO_KEY}
+  include_path: null
+
+email:
+  sender: ${oc.env:SENDER}
+  receiver: ${oc.env:RECEIVER}
+  smtp_server: smtp.qq.com
+  smtp_port: 465
+  sender_password: ${oc.env:SENDER_PASSWORD}
+
+llm:
+  api:
+    key: ${oc.env:OPENAI_API_KEY}
+    base_url: ${oc.env:OPENAI_API_BASE}
+  generation_kwargs:
+    model: deepseek-chat
+    max_tokens: 1536
+  language: English
+
+reranker:
+  llm_fast:
+    max_corpus_samples: 10  # 第一阶段：快速筛选，只对比 10 篇核心论文
+    batch_size: 20  # 大批量处理加速
+  llm:
+    max_corpus_samples: 20  # 第二阶段：精细排序，对比 20 篇论文
+    batch_size: 5  # 小批量保��质量
+  tag_weights:
+    ⭐⭐⭐⭐⭐: 2.5
+    ⭐⭐⭐⭐: 2.3
+    ⭐⭐⭐: 2.0
+    ⭐⭐: 1.5
+    ⭐: 1.2
+  diversity:
+    enabled: true
+    bonus_strength: 0.3
+
+source:
+  arxiv:
+    category: ["cs.AI","cs.CV","cs.LG","cs.CL","cs.RO","cs.SY","cs.CE"]
+    include_cross_list: true
+
+executor:
+  send_empty: false
+  max_workers: 16
+  max_paper_num: 50
+  pre_filter_num: 200  # 关键：第一阶段筛选出 200 篇
+  first_stage_reranker: llm_fast  # 第一阶段用 LLM 快速筛选
+  reranker: llm  # 第二阶段用 LLM 精排
+  debug: ${oc.env:DEBUG,null}
+  source: ['arxiv']
