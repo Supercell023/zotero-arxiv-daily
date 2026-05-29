@@ -96,12 +96,15 @@ class ArxivRetriever(BaseRetriever):
             if full_text is None:
                 full_text = extract_text_from_tar(raw_paper)
 
+        # Remove trailing colon from entry_id if present
+        paper_url = raw_paper.entry_id.rstrip(':')
+
         paper = Paper(
             source=self.name,
             title=title,
             authors=authors,
             abstract=abstract,
-            url=raw_paper.entry_id,
+            url=paper_url,
             pdf_url=pdf_url,
             full_text=full_text
         )
