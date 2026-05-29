@@ -10,6 +10,7 @@ from urllib.request import urlretrieve
 from tqdm import tqdm
 import os
 from loguru import logger
+import time
 
 PDF_EXTRACT_TIMEOUT = 180
 @register_retriever("arxiv")
@@ -18,31 +19,56 @@ class ArxivRetriever(BaseRetriever):
         super().__init__(config)
         if self.config.source.arxiv.category is None:
             raise ValueError("category must be specified for arxiv.")
+    def _fetch_batch_with_retry(self, client, all_paper_ids, start_idx, end_idx, max_retries=5, base_delay=2):
+        """使用指数退避重试获取一批论文"""
+        batch_ids = all_paper_ids[start_idx:end_idx]
+        
+        for attempt in range(max_retries):
+            try:
+                search = arxiv.Search(id_list=batch_ids)
+                batch = list(client.results(search))
+                return batch
+            except arxiv.HTTPError as e:
+                if e.status_code == 429:  # 速率限制
+                    delay = base_delay * (2 ** attempt)  # 指数退避
+                    if attempt < max_retries - 1:
+                        logger.warning(f"arXiv API 速率限制。等待 {delay} 秒后重试... (第 {attempt + 1}/{max_retries} 次)")
+                        time.sleep(delay)
+                    else:
+                        logger.error(f"在 {max_retries} 次重试后仍然被速率限制")
+                        raise
+                else:
+                    raise
+                    
+        return []
+        
     def _retrieve_raw_papers(self) -> list[ArxivResult]:
-        client = arxiv.Client(num_retries=10,delay_seconds=10)
+        client = arxiv.Client(num_retries=10, delay_seconds=10)
         query = '+'.join(self.config.source.arxiv.category)
         include_cross_list = self.config.source.arxiv.get("include_cross_list", False)
-        # Get the latest paper from arxiv rss feed
+        # 从 arxiv rss feed 获取最新论文
         feed = feedparser.parse(f"https://rss.arxiv.org/atom/{query}")
         if 'Feed error for query' in feed.feed.title:
             raise Exception(f"Invalid ARXIV_QUERY: {query}.")
         raw_papers = []
         allowed_announce_types = {"new", "cross"} if include_cross_list else {"new"}
         all_paper_ids = [
-            i.id.removeprefix("oai:arXiv.org:")
-            for i in feed.entries
-            if i.get("arxiv_announce_type", "new") in allowed_announce_types
-        ]
+                i.id.removeprefix("oai:arXiv.org:")
+                for i in feed.entries
+                if i.get("arxiv_announce_type", "new") in allowed_announce_types
+            ]
         if self.config.executor.debug:
             all_paper_ids = all_paper_ids[:10]
-
-        # Get full information of each paper from arxiv api
+                
+            # 使用重试逻辑获取每批论文的完整信息
         bar = tqdm(total=len(all_paper_ids))
-        for i in range(0,len(all_paper_ids),20):
-            search = arxiv.Search(id_list=all_paper_ids[i:i+20])
-            batch = list(client.results(search))
+        for i in range(0, len(all_paper_ids), 20):
+            batch = self._fetch_batch_with_retry(client, all_paper_ids, i, min(i+20, len(all_paper_ids)))
             bar.update(len(batch))
             raw_papers.extend(batch)
+            # 批次间添加延迟以避免速率限制
+            if i + 20 < len(all_paper_ids):
+                time.sleep(3)  # 在批次之间等待 3 秒
         bar.close()
 
         return raw_papers
