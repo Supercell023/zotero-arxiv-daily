@@ -29,13 +29,39 @@ class ArxivRetriever(BaseRetriever):
                 batch = list(client.results(search))
                 return batch
             except arxiv.HTTPError as e:
-                if e.status_code in [429, 503]:  # 速率限制或服务不可用
+                # Extract status code from HTTPError
+                # HTTPError message format: "Page request resulted in HTTP XXX (url)"
+                status_code = None
+                try:
+                    # Try to extract status code from error message
+                    error_msg = str(e)
+                    if "HTTP" in error_msg:
+                        # Extract the status code from the error message
+                        parts = error_msg.split("HTTP")
+                        if len(parts) > 1:
+                            status_str = parts[1].strip().split()[0]
+                            status_code = int(status_str)
+                except (ValueError, IndexError):
+                    pass
+                
+                # If we couldn't extract, check if the exception has args
+                if status_code is None and hasattr(e, 'args') and len(e.args) > 1:
+                    try:
+                        status_code = int(e.args[1])
+                    except (ValueError, IndexError, TypeError):
+                        pass
+                
+                # Default to 429 if we can't determine the status code
+                if status_code is None:
+                    status_code = 429
+                
+                if status_code in [429, 503]:  # 速率限制或服务不可用
                     delay = base_delay * (2 ** attempt)  # 指数退避
                     if attempt < max_retries - 1:
-                        logger.warning(f"arXiv API HTTP {e.status_code}。等待 {delay} 秒后重试... (第 {attempt + 1}/{max_retries} 次)")
+                        logger.warning(f"arXiv API HTTP {status_code}。等待 {delay} 秒后重试... (第 {attempt + 1}/{max_retries} 次)")
                         time.sleep(delay)
                     else:
-                        logger.error(f"在 {max_retries} 次重试后仍然收到 HTTP {e.status_code}")
+                        logger.error(f"在 {max_retries} 次重试后仍然收到 HTTP {status_code}")
                         raise
                 else:
                     raise
