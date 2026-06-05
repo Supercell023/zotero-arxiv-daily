@@ -29,15 +29,24 @@ class ArxivRetriever(BaseRetriever):
                 batch = list(client.results(search))
                 return batch
             except arxiv.HTTPError as e:
-                if e.status_code == 429:  # 速率限制
+                if e.status_code in [429, 503]:  # 速率限制或服务不可用
                     delay = base_delay * (2 ** attempt)  # 指数退避
                     if attempt < max_retries - 1:
-                        logger.warning(f"arXiv API 速率限制。等待 {delay} 秒后重试... (第 {attempt + 1}/{max_retries} 次)")
+                        logger.warning(f"arXiv API HTTP {e.status_code}。等待 {delay} 秒后重试... (第 {attempt + 1}/{max_retries} 次)")
                         time.sleep(delay)
                     else:
-                        logger.error(f"在 {max_retries} 次重试后仍然被速率限制")
+                        logger.error(f"在 {max_retries} 次重试后仍然收到 HTTP {e.status_code}")
                         raise
                 else:
+                    raise
+            except Exception as e:
+                # Handle other potential errors like connection errors
+                if attempt < max_retries - 1:
+                    delay = base_delay * (2 ** attempt)
+                    logger.warning(f"获取批次时出错: {type(e).__name__}: {e}。等待 {delay} 秒后重试... (第 {attempt + 1}/{max_retries} 次)")
+                    time.sleep(delay)
+                else:
+                    logger.error(f"在 {max_retries} 次重试后失败: {type(e).__name__}: {e}")
                     raise
                     
         return []
@@ -68,7 +77,7 @@ class ArxivRetriever(BaseRetriever):
             raw_papers.extend(batch)
             # 批次间添加延迟以避免速率限制
             if i + 20 < len(all_paper_ids):
-                time.sleep(3)  # 在批次之间等待 3 秒
+                time.sleep(5)  # 在批次之间等待 5 秒（增加延迟以更好地处理速率限制）
         bar.close()
 
         return raw_papers
