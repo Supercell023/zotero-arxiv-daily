@@ -9,76 +9,73 @@ import feedparser
 from urllib.request import urlretrieve
 from tqdm import tqdm
 import os
+import random
 from loguru import logger
 import time
 
 PDF_EXTRACT_TIMEOUT = 180
+ARXIV_BATCH_SIZE = 20
+ARXIV_MIN_BATCH_SIZE = 5
+ARXIV_MAX_RETRIES = 3
+ARXIV_RETRY_BASE_DELAY = 10
+ARXIV_RETRY_MAX_DELAY = 120
+ARXIV_RETRY_JITTER = 0.25
+
 @register_retriever("arxiv")
 class ArxivRetriever(BaseRetriever):
     def __init__(self, config):
         super().__init__(config)
         if self.config.source.arxiv.category is None:
             raise ValueError("category must be specified for arxiv.")
-    def _fetch_batch_with_retry(self, client, all_paper_ids, start_idx, end_idx, max_retries=5, base_delay=2):
-        """使用指数退避重试获取一批论文"""
-        batch_ids = all_paper_ids[start_idx:end_idx]
-        
+    def _fetch_ids_with_retry(
+        self,
+        client,
+        batch_ids,
+        max_retries=ARXIV_MAX_RETRIES,
+        base_delay=ARXIV_RETRY_BASE_DELAY,
+    ):
+        """Fetch one ID batch with one bounded retry layer."""
         for attempt in range(max_retries):
             try:
                 search = arxiv.Search(id_list=batch_ids)
-                batch = list(client.results(search))
-                return batch
+                return list(client.results(search))
             except arxiv.HTTPError as e:
-                # Extract status code from HTTPError
-                # HTTPError message format: "Page request resulted in HTTP XXX (url)"
-                status_code = None
-                try:
-                    # Try to extract status code from error message
-                    error_msg = str(e)
-                    if "HTTP" in error_msg:
-                        # Extract the status code from the error message
-                        parts = error_msg.split("HTTP")
-                        if len(parts) > 1:
-                            status_str = parts[1].strip().split()[0]
-                            status_code = int(status_str)
-                except (ValueError, IndexError):
-                    pass
-                
-                # If we couldn't extract, check if the exception has args
-                if status_code is None and hasattr(e, 'args') and len(e.args) > 1:
-                    try:
-                        status_code = int(e.args[1])
-                    except (ValueError, IndexError, TypeError):
-                        pass
-                
-                # Default to 429 if we can't determine the status code
-                if status_code is None:
-                    status_code = 429
-                
-                if status_code in [429, 503]:  # 速率限制或服务不可用
-                    delay = base_delay * (2 ** attempt)  # 指数退避
-                    if attempt < max_retries - 1:
-                        logger.warning(f"arXiv API HTTP {status_code}。等待 {delay} 秒后重试... (第 {attempt + 1}/{max_retries} 次)")
-                        time.sleep(delay)
-                    else:
-                        logger.error(f"在 {max_retries} 次重试后仍然收到 HTTP {status_code}")
-                        raise
-                else:
+                status_code = e.status
+                if status_code not in (429, 503) or attempt == max_retries - 1:
                     raise
-            except Exception as e:
-                # Handle other potential errors like connection errors
-                if attempt < max_retries - 1:
-                    delay = base_delay * (2 ** attempt)
-                    logger.warning(f"获取批次时出错: {type(e).__name__}: {e}。等待 {delay} 秒后重试... (第 {attempt + 1}/{max_retries} 次)")
-                    time.sleep(delay)
-                else:
-                    logger.error(f"在 {max_retries} 次重试后失败: {type(e).__name__}: {e}")
-                    raise
-                    
-        return []
+
+                backoff = min(base_delay * (2 ** attempt), ARXIV_RETRY_MAX_DELAY)
+                delay = backoff + random.uniform(0, backoff * ARXIV_RETRY_JITTER)
+                logger.warning(
+                    f"arXiv API HTTP {status_code}; retrying in {delay:.1f}s "
+                    f"({attempt + 1}/{max_retries - 1})"
+                )
+                time.sleep(delay)
+
+    def _fetch_batch_with_fallback(self, client, batch_ids):
+        """Fetch IDs, splitting a throttled batch until the minimum size."""
+        try:
+            return self._fetch_ids_with_retry(client, batch_ids)
+        except arxiv.HTTPError as e:
+            if e.status not in (429, 503) or len(batch_ids) <= ARXIV_MIN_BATCH_SIZE:
+                raise
+
+            midpoint = len(batch_ids) // 2
+            left_ids = batch_ids[:midpoint]
+            right_ids = batch_ids[midpoint:]
+            logger.warning(
+                f"arXiv API HTTP {e.status} persisted for {len(batch_ids)} IDs; "
+                f"falling back to batches of {len(left_ids)} and {len(right_ids)}"
+            )
+            return (
+                self._fetch_batch_with_fallback(client, left_ids)
+                + self._fetch_batch_with_fallback(client, right_ids)
+            )
         
     def _retrieve_raw_papers(self) -> list[ArxivResult]:
-        client = arxiv.Client(num_retries=10, delay_seconds=10)
+        # Retry here rather than stacking our retries on arxiv.Client retries.
+        # The client still enforces a three-second interval between requests.
+        client = arxiv.Client(num_retries=0, delay_seconds=3)
         query = '+'.join(self.config.source.arxiv.category)
         include_cross_list = self.config.source.arxiv.get("include_cross_list", False)
         # 从 arxiv rss feed 获取最新论文
@@ -97,13 +94,11 @@ class ArxivRetriever(BaseRetriever):
                 
             # 使用重试逻辑获取每批论文的完整信息
         bar = tqdm(total=len(all_paper_ids))
-        for i in range(0, len(all_paper_ids), 20):
-            batch = self._fetch_batch_with_retry(client, all_paper_ids, i, min(i+20, len(all_paper_ids)))
+        for i in range(0, len(all_paper_ids), ARXIV_BATCH_SIZE):
+            batch_ids = all_paper_ids[i:i + ARXIV_BATCH_SIZE]
+            batch = self._fetch_batch_with_fallback(client, batch_ids)
             bar.update(len(batch))
             raw_papers.extend(batch)
-            # 批次间添加延迟以避免速率限制
-            if i + 20 < len(all_paper_ids):
-                time.sleep(5)  # 在批次之间等待 5 秒（增加延迟以更好地处理速率限制）
         bar.close()
 
         return raw_papers
